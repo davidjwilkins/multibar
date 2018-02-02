@@ -2,6 +2,7 @@ package multibar
 
 import (
 	"fmt"
+	"io"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -22,8 +23,8 @@ type BarContainer struct {
 	startingLine            int
 	totalNewlines           int
 	historicNewlinesCounter int
-
-	history map[int]string
+	writer                  io.Writer
+	history                 map[int]string
 	sync.Mutex
 }
 
@@ -42,16 +43,17 @@ type ProgressBar struct {
 	Prepend         string
 
 	progressChan chan int
+	writer       io.Writer
 }
 
-func New() (*BarContainer, error) {
+func New(w io.Writer) (*BarContainer, error) {
 	// can swallow err because sensible defaults are returned from curse
 	width, lines, _ := curse.GetScreenDimensions()
 	_, line, _ := curse.GetCursorPosition()
 
 	history := make(map[int]string)
 
-	b := &BarContainer{screenWidth: width, screenLines: lines, startingLine: line, history: history}
+	b := &BarContainer{screenWidth: width, screenLines: lines, startingLine: line, history: history, writer: w}
 	// todo: need to figure out a way to deal with additional progressbars while the listener
 	// is listening. for the time being, the calling app will have to call listen after
 	// all bars are declared
@@ -99,6 +101,7 @@ func (b *BarContainer) MakeBar(total int, prepend string) ProgressFunc {
 		ShowTimeElapsed: true,
 		StartTime:       time.Now(),
 		progressChan:    ch,
+		writer:          b.writer,
 	}
 
 	b.Bars = append(b.Bars, bar)
@@ -158,7 +161,7 @@ func (p *ProgressBar) Update(progress int) {
 	c, _ := curse.New()
 	c.Move(1, p.Line)
 	c.EraseCurrentLine()
-	fmt.Printf("\r%s %s%c%s%c%s", p.Prepend, percent, p.LeftEnd, strings.Join(bar, ""), p.RightEnd, timeElapsed)
+	fmt.Fprintf(p.writer, "\r%s %s%c%s%c%s", p.Prepend, percent, p.LeftEnd, strings.Join(bar, ""), p.RightEnd, timeElapsed)
 	c.Move(c.StartingPosition.X, c.StartingPosition.Y)
 }
 
@@ -199,7 +202,7 @@ func (b *BarContainer) redrawAll(moveUp int) {
 		c.EraseCurrentLine()
 		c.Move(1, line+moveUp)
 		c.EraseCurrentLine()
-		fmt.Print(printed)
+		fmt.Fprint(b.writer, printed)
 	}
 	b.history = newHistory
 	c.Move(c.StartingPosition.X, c.StartingPosition.Y)
@@ -214,7 +217,7 @@ func (b *BarContainer) Print(a ...interface{}) (n int, err error) {
 	b.addedNewlines(newlines)
 	thisLine := b.startingLine + b.totalNewlines
 	b.history[thisLine] = fmt.Sprint(a...)
-	return fmt.Print(a...)
+	return fmt.Fprint(b.writer, a...)
 }
 
 func (b *BarContainer) Printf(format string, a ...interface{}) (n int, err error) {
@@ -225,7 +228,7 @@ func (b *BarContainer) Printf(format string, a ...interface{}) (n int, err error
 	b.addedNewlines(newlines)
 	thisLine := b.startingLine + b.totalNewlines
 	b.history[thisLine] = fmt.Sprintf(format, a...)
-	return fmt.Printf(format, a...)
+	return fmt.Fprintf(b.writer, format, a...)
 }
 
 func (b *BarContainer) Println(a ...interface{}) (n int, err error) {
@@ -235,7 +238,7 @@ func (b *BarContainer) Println(a ...interface{}) (n int, err error) {
 	b.addedNewlines(newlines)
 	thisLine := b.startingLine + b.totalNewlines
 	b.history[thisLine] = fmt.Sprint(a...)
-	return fmt.Println(a...)
+	return fmt.Fprintln(b.writer, a...)
 }
 
 func countAllNewlines(interfaces ...interface{}) int {
